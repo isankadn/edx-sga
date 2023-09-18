@@ -50,6 +50,15 @@ from edx_sga.utils import (
     is_finalized_submission,
     utcnow,
 )
+from edx_ace.message import Message
+from django.contrib.sites.models import Site
+from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
+from django.contrib.auth.models import User  # lint-amnesty, pylint: disable=imported-auth-user
+from openedx.core.lib.celery.task_utils import emulate_http_request
+from edx_ace import ace
+from edx_ace.errors import RecoverableChannelDeliveryError
+from celery.exceptions import MaxRetriesExceededError
+from edx_ace.recipient import Recipient
 
 log = logging.getLogger(__name__)
 
@@ -305,6 +314,7 @@ class StaffGradedAssignmentXBlock(
             submission.answer["finalized"] = True
             submission.submitted_at = django_now()
             submission.save()
+            self.send_notification_email("xxxxxxxxxxx", "isankadn@gmail.com")
         return Response(json_body=self.student_state())
 
     @XBlock.handler
@@ -1033,6 +1043,60 @@ class StaffGradedAssignmentXBlock(
         """
         return self.is_course_staff()
 
+    def send_notification_email(self, msg_string, from_address=None):
+        """
+        Sending an activation email to the user.
+        """
+
+        user = self.get_real_user()
+        msg = Message(
+                app_label='edx_sga',
+                name='submission',
+                options={
+                    'from_address': settings.DEFAULT_FROM_EMAIL,
+
+                },
+                recipient=Recipient(lms_user_id=user.id, email_address=settings.DEFAULT_FROM_EMAIL),
+            )
+
+        max_retries = settings.RETRY_ACTIVATION_EMAIL_MAX_ATTEMPTS
+
+
+        if from_address is None:
+            from_address = configuration_helpers.get_value('ACTIVATION_EMAIL_FROM_ADDRESS') or (
+                configuration_helpers.get_value('email_from_address', settings.DEFAULT_FROM_EMAIL)
+            )
+        msg.options['from_address'] = from_address
+
+        dest_addr = msg.recipient.email_address
+        site = Site.objects.get_current()
+
+        try:
+            with emulate_http_request(site=site, user=user):
+                log.info('Sending activation email to user from "%s" to "%s"', from_address, dest_addr)
+                ace.send(msg)
+        except RecoverableChannelDeliveryError:
+            log.info('Retrying sending email to user {dest_addr}, attempt # {attempt} of {max_attempts}'.format(
+                dest_addr=dest_addr,
+                attempt=5,
+                max_attempts=max_retries
+            ))
+            try:
+                self.retry(countdown=settings.RETRY_ACTIVATION_EMAIL_TIMEOUT, max_retries=max_retries)
+            except MaxRetriesExceededError:
+                log.error(
+                    'Unable to send activation email to user from "%s" to "%s"',
+                    from_address,
+                    dest_addr,
+                    exc_info=True
+                )
+        except Exception:
+            log.exception(
+                'Unable to send activation email to user from "%s" to "%s"',
+                from_address,
+                dest_addr,
+            )
+            raise Exception  # lint-amnesty, pylint: disable=raise-missing-from
 
 def _resource(path):  # pragma: NO COVER
     """
