@@ -314,7 +314,7 @@ class StaffGradedAssignmentXBlock(
             submission.answer["finalized"] = True
             submission.submitted_at = django_now()
             submission.save()
-            self.send_notification_email("xxxxxxxxxxx", "isankadn@gmail.com")
+            self.send_notification_email("xxxxxxxxxxx", None)
         return Response(json_body=self.student_state())
 
     @XBlock.handler
@@ -1047,7 +1047,6 @@ class StaffGradedAssignmentXBlock(
         """
         Sending an activation email to the user.
         """
-
         user = self.get_real_user()
         msg = Message(
                 app_label='edx_sga',
